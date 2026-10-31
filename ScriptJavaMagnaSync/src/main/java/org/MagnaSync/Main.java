@@ -28,37 +28,41 @@ public class Main {
                 """);
 
 
-//        O Script vai capturar apenas a velocidade de download, blz:?
+
+
+//        O Script vai capturar apenas a velocidade de download e upload
 
         SystemInfoProvider si = SystemInfoFactory.create();
         List<NetworkIF> placas = si.getHardware().getNetworkIFs();
         List<Leitura> leiturasDoBanco = connection.query("select * from leitura;", new BeanPropertyRowMapper<>(Leitura.class));
 
         long recebidoAntes = totalRecebido(placas);
-//        long enviadoAntes = totalEnviado(placas);
+        long enviadoAntes = totalEnviado(placas);
 
         while (true) {
             Thread.sleep(1000);
             leiturasDoBanco = connection.query("select * from leitura;", new BeanPropertyRowMapper<>(Leitura.class));
 
             if(!leiturasDoBanco.isEmpty()){
+                System.out.println(leiturasDoBanco.reversed().get(1));
                 System.out.println(leiturasDoBanco.getLast());
             }
 
 
             long recebidoAgora = totalRecebido(placas);
-//            long enviadoAgora = totalEnviado(placas);
+            long enviadoAgora = totalEnviado(placas);
 
             double downloadKB = (recebidoAgora - recebidoAntes) / 1024.0;
-//            double uploadKB = (enviadoAgora - enviadoAntes) / 1024.0;
+            double uploadKB = (enviadoAgora - enviadoAntes) / 1024.0;
 
-//            System.out.printf("Download: %.1f KB/s | Upload: %.1f KB/s%n", downloadKB/*, uploadKB*/);
+            System.out.printf("Download: %.1f KB/s | Upload: %.1f KB/s%n", downloadKB/*, uploadKB*/);
 
-//           inserindo no banco
+//            inserindo no banco
             connection.update("insert into leitura (valor) values (?);", downloadKB);
+            connection.update("insert into leitura (valor) values (?);", uploadKB);
 
             recebidoAntes = recebidoAgora;
-//            enviadoAntes = enviadoAgora;
+            enviadoAntes = enviadoAgora;
 
         }
     }
@@ -72,13 +76,13 @@ public class Main {
         return total;
     }
 
-//    private static long totalEnviado(List<NetworkIF> placas) {
-//        long total = 0;
-//        for (NetworkIF placa : placas) {
-//            placa.updateAttributes();
-//            total += placa.getBytesSent();
-//        }
-//        return total;
-//    }
+    private static long totalEnviado(List<NetworkIF> placas) {
+        long total = 0;
+        for (NetworkIF placa : placas) {
+            placa.updateAttributes();
+            total += placa.getBytesSent();
+        }
+        return total;
+    }
 
 }
