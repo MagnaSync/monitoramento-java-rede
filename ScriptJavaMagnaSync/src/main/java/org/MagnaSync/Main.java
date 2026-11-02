@@ -1,7 +1,5 @@
 package org.MagnaSync;
 
-import org.MagnaSync.Entities.Leitura;
-import org.springframework.jdbc.core.BeanPropertyRowMapper;
 import org.springframework.jdbc.core.JdbcTemplate;
 import oshi.hardware.NetworkIF;
 import oshi.spi.SystemInfoFactory;
@@ -23,41 +21,29 @@ public class Main {
         DBConnectionProvider dbConnectionProvider = new DBConnectionProvider();
         JdbcTemplate connection = dbConnectionProvider.getConnection();
 
-        connection.execute("""
-                CREATE TABLE leitura (
-                    id INT PRIMARY KEY AUTO_INCREMENT,
-                    fkEquipamento INT NOT NULL default 1,
-                    fkComponente INT NOT NULL default 1,
-                    fkMetrica INT NOT NULL default 1,
-                    valor DOUBLE NOT NULL,
-                    data_hora DATETIME NOT NULL default now()
-                );
-                """);
-
-
-
-
 //        O Script vai capturar velocidade de download, upload e latência
 
         SystemInfoProvider si = SystemInfoFactory.create();
         List<NetworkIF> placas = si.getHardware().getNetworkIFs();
-        List<Leitura> leiturasDoBanco = connection.query("select * from leitura;", new BeanPropertyRowMapper<>(Leitura.class));
+
+//        A máquina precisa estar cadastrada (pelo programa Python) para o Java saber o equipamento
+        int equipamentoId = esperarEquipamento(connection, placas);
+        System.out.println("Equipamento encontrado: id " + equipamentoId);
+
+//        Cada medida de rede é um componente; o parametro fica sem métrica (NULL)
+        int componenteDownload = buscarComponente(connection, "Rede - Download");
+        int componenteUpload = buscarComponente(connection, "Rede - Upload");
+        int componenteLatencia = buscarComponente(connection, "Rede - Latência");
+
+        int parametroDownload = garantirParametro(connection, equipamentoId, componenteDownload);
+        int parametroUpload = garantirParametro(connection, equipamentoId, componenteUpload);
+        int parametroLatencia = garantirParametro(connection, equipamentoId, componenteLatencia);
 
         long recebidoAntes = totalRecebido(placas);
         long enviadoAntes = totalEnviado(placas);
 
         while (true) {
             Thread.sleep(1000);
-            leiturasDoBanco = connection.query("select * from leitura;", new BeanPropertyRowMapper<>(Leitura.class));
-
-//            if (leiturasDoBanco.size() >= 3) {
-//                System.out.println(leiturasDoBanco.reversed().get(2));
-//                System.out.println(leiturasDoBanco.reversed().get(1));
-//                System.out.println(leiturasDoBanco.getLast());
-//            } else if (!leiturasDoBanco.isEmpty()) {
-//                System.out.println(leiturasDoBanco.getLast());
-//            }
-
 
             long recebidoAgora = totalRecebido(placas);
             long enviadoAgora = totalEnviado(placas);
@@ -69,14 +55,63 @@ public class Main {
             System.out.printf("Download: %.1f KB/s | Upload: %.1f KB/s | Latência: %.1f ms%n", downloadKB, uploadKB, latenciaMs);
 
 //            inserindo no banco
-            connection.update("insert into leitura (valor) values (?);", downloadKB);
-            connection.update("insert into leitura (valor) values (?);", uploadKB);
-            connection.update("insert into leitura (valor) values (?);", latenciaMs);
+            inserirLeitura(connection, equipamentoId, componenteDownload, parametroDownload, downloadKB);
+            inserirLeitura(connection, equipamentoId, componenteUpload, parametroUpload, uploadKB);
+            inserirLeitura(connection, equipamentoId, componenteLatencia, parametroLatencia, latenciaMs);
 
             recebidoAntes = recebidoAgora;
             enviadoAntes = enviadoAgora;
 
         }
+    }
+
+    private static int esperarEquipamento(JdbcTemplate connection, List<NetworkIF> placas) throws InterruptedException {
+        while (true) {
+            for (NetworkIF placa : placas) {
+                String mac = placa.getMacaddr();
+                if (mac == null || mac.isBlank()) {
+                    continue;
+                }
+                List<Integer> ids = connection.queryForList(
+                        "SELECT id FROM equipamento WHERE mac_adress = ? LIMIT 1",
+                        Integer.class, mac.toUpperCase());
+                if (!ids.isEmpty()) {
+                    return ids.get(0);
+                }
+            }
+            System.out.println("Máquina ainda não cadastrada no banco. Cadastre pelo programa Python. Nova tentativa em 15s...");
+            Thread.sleep(15000);
+        }
+    }
+
+    private static int buscarComponente(JdbcTemplate connection, String tipo) {
+        List<Integer> ids = connection.queryForList(
+                "SELECT c.id FROM componente c JOIN tipoComponente t ON t.id = c.fkTipo WHERE t.tipo = ? LIMIT 1",
+                Integer.class, tipo);
+        if (ids.isEmpty()) {
+            throw new IllegalStateException("Componente '" + tipo + "' não existe no banco. Rode o arquivo rede.sql.");
+        }
+        return ids.get(0);
+    }
+
+    private static int garantirParametro(JdbcTemplate connection, int equipamentoId, int componenteId) {
+        List<Integer> ids = connection.queryForList(
+                "SELECT id FROM parametro WHERE fkEquipamento = ? AND fkComponente = ? LIMIT 1",
+                Integer.class, equipamentoId, componenteId);
+        if (!ids.isEmpty()) {
+            return ids.get(0);
+        }
+        Integer novoId = connection.queryForObject("SELECT COALESCE(MAX(id), 0) + 1 FROM parametro", Integer.class);
+        connection.update(
+                "INSERT INTO parametro (id, fkEquipamento, fkComponente, metrica) VALUES (?, ?, ?, NULL)",
+                novoId, equipamentoId, componenteId);
+        return novoId;
+    }
+
+    private static void inserirLeitura(JdbcTemplate connection, int equipamentoId, int componenteId, int parametroId, double valor) {
+        connection.update(
+                "INSERT INTO leitura (fkEquipamento, fkComponente, fkMetrica, valor, data_hora) VALUES (?, ?, ?, ?, NOW())",
+                equipamentoId, componenteId, parametroId, valor);
     }
 
     private static double obterLatencia(String host) {
